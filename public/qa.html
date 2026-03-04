@@ -109,7 +109,7 @@
             <h1>🌾 内蒙古农牧业问答助手</h1>
             <p>基于内蒙古农牧业资料库的智能问答系统</p>
         </div>
-        <div class="status" id="status">初始化中...</div>
+        <div class="status" id="status">连接中...</div>
         <div class="chat-area" id="chatArea"></div>
         <div class="input-area">
             <input type="text" id="questionInput" placeholder="请输入关于内蒙古农牧业的问题..." onkeypress="handleKeyPress(event)">
@@ -118,28 +118,87 @@
     </div>
 
     <script>
-        // 使用 HTTP API 轮询方式（更稳定）
-        const API_BASE = 'https://dictionary-fine-qld-contract.trycloudflare.com';
+        // 使用代理服务器的 WebSocket
+        const wsUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws';
         const TOKEN = '3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f';
 
-        // 存储会话ID
-        let sessionId = null;
+        let ws = null;
+        let reconnectTimer = null;
+        let authenticated = false;
+        let pendingQuestion = null;
 
         function updateStatus(text, isError = false) {
             document.getElementById('status').textContent = text;
             document.getElementById('status').className = 'status' + (isError ? ' error' : '');
         }
 
-        // 发送问题
-        async function sendQuestion() {
+        function connect() {
+            updateStatus('正在连接...');
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                updateStatus('✅ 已连接 - 认证中...');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received:', data);
+                    
+                    // 处理连接挑战
+                    if (data.type === 'event' && data.event === 'connect.challenge') {
+                        ws.send(JSON.stringify({
+                            type: 'response',
+                            payload: { nonce: data.payload.nonce }
+                        }));
+                        return;
+                    }
+                    
+                    if (data.id === 1 && data.result) {
+                        authenticated = true;
+                        updateStatus('✅ 已连接 - 可以提问');
+                        // 如果有 pending 的问题，发送它
+                        if (pendingQuestion) {
+                            const q = pendingQuestion;
+                            pendingQuestion = null;
+                            sendViaWS(q);
+                        }
+                    } else if (data.method === 'agent:notify') {
+                        const content = data.params?.message?.content?.[0]?.text || 
+                                       data.params?.message || '';
+                        if (content) {
+                            const loading = document.getElementById('loadingMsg');
+                            if (loading) loading.remove();
+                            document.getElementById('sendBtn').disabled = false;
+                            addMessage(content, false);
+                        }
+                    }
+                } catch (e) {
+                    console.log('Raw:', event.data);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('Error:', error);
+                updateStatus('❌ 连接错误', true);
+            };
+
+            ws.onclose = () => {
+                updateStatus('⚠️ 连接断开，3秒后重连...', true);
+                authenticated = false;
+                reconnectTimer = setTimeout(connect, 3000);
+            };
+        }
+
+        function sendQuestion() {
             const input = document.getElementById('questionInput');
-            const sendBtn = document.getElementById('sendBtn');
             const question = input.value.trim();
             if (!question) return;
 
             addMessage(question, true);
             input.value = '';
-            sendBtn.disabled = true;
+            document.getElementById('sendBtn').disabled = true;
 
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'message bot';
@@ -147,48 +206,24 @@
             loadingDiv.innerHTML = '<div class="message-content">⏳ 思考中...</div>';
             document.getElementById('chatArea').appendChild(loadingDiv);
 
-            try {
-                // 使用代理服务器发送请求
-                const response = await fetch('/api/ask', {
-                    method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + TOKEN
-                    },
-                    body: JSON.stringify({ 
-                        message: question,
-                        sessionId: sessionId
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('请求失败: ' + response.status);
-                }
-
-                const data = await response.json();
-                console.log('Response:', data);
-                
-                // 保存sessionId
-                if (data.sessionId) {
-                    sessionId = data.sessionId;
-                }
-
-                // 移除加载消息
-                const loading = document.getElementById('loadingMsg');
-                if (loading) loading.remove();
-
-                // 显示回答
-                addMessage(data.message || data.response || JSON.stringify(data), false);
-            } catch (error) {
-                console.error('Error:', error);
-                
-                const loading = document.getElementById('loadingMsg');
-                if (loading) loading.remove();
-                
-                addMessage('❌ 请求失败: ' + error.message + '\n\n请刷新页面重试', false);
+            if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) {
+                pendingQuestion = question;
+                loadingDiv.remove();
+                addMessage('⏳ 连接中，请稍候...', false);
+                if (!ws) connect();
+                return;
             }
 
-            sendBtn.disabled = false;
+            sendViaWS(question);
+        }
+
+        function sendViaWS(question) {
+            ws.send(JSON.stringify({
+                jsonrpc: "2.0",
+                id: Date.now(),
+                method: "agent/run",
+                params: { message: question, channel: "webchat" }
+            }));
         }
 
         function addMessage(content, isUser = false) {
@@ -212,11 +247,12 @@
         }
 
         // 初始化
+        connect();
+        
         window.onload = () => {
-            updateStatus('✅ 已就绪 - 请输入问题');
             setTimeout(() => {
                 addMessage('🌾 您好！我是内蒙古农牧业问答助手。\n\n请问有什么关于内蒙古农牧业的问题可以问我，例如：\n• 2023年粮食产量是多少？\n• 牛奶产量全国排名？', false);
-            }, 500);
+            }, 1000);
         };
     </script>
 </body>
