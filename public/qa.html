@@ -118,8 +118,8 @@
     </div>
 
     <script>
-        // 使用相对路径（通过代理服务器）
-        const WS_URL = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws';
+        // 直接连接 Gateway (通过 Cloudflare Tunnel)
+        const GATEWAY_WS = 'wss://dictionary-fine-qld-contract.trycloudflare.com/ws';
         const API_TOKEN = '3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f';
 
         function updateStatus(text, isError = false) {
@@ -130,7 +130,7 @@
         function connectWebSocket() {
             updateStatus('正在连接Gateway...');
             
-            const ws = new WebSocket(WS_URL);
+            const ws = new WebSocket(GATEWAY_WS);
 
             ws.onopen = () => {
                 updateStatus('✅ 已连接 - 正在认证...');
