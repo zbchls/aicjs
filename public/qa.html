@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内蒙古农牧业问答助手</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 800px;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 24px;
+            text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 14px; }
+        .chat-area {
+            height: 400px;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .message {
+            margin-bottom: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+        .message.user { align-items: flex-end; }
+        .message.bot { align-items: flex-start; }
+        .message-content {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        .message.user .message-content {
+            background: #667eea;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .message.bot .message-content {
+            background: white;
+            color: #333;
+            border: 1px solid #ddd;
+            border-bottom-left-radius: 4px;
+        }
+        .message-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+        }
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 12px;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 14px 18px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        .input-area input:focus { border-color: #667eea; }
+        .input-area button {
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            cursor: pointer;
+        }
+        .input-area button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .status {
+            padding: 10px 20px;
+            background: #fff3cd;
+            font-size: 13px;
+            color: #856404;
+            text-align: center;
+        }
+        .status.error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌾 内蒙古农牧业问答助手</h1>
+            <p>基于内蒙古农牧业资料库的智能问答系统</p>
+        </div>
+        <div class="status" id="status">连接中...</div>
+        <div class="chat-area" id="chatArea"></div>
+        <div class="input-area">
+            <input type="text" id="questionInput" placeholder="请输入关于内蒙古农牧业的问题..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendQuestion()" id="sendBtn">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const GATEWAY_URL = window.location.origin;
+        const WS_URL = GATEWAY_URL.replace('http', 'ws');
+        
+        let ws = null;
+
+        function updateStatus(text, isError = false) {
+            document.getElementById('status').textContent = text;
+            document.getElementById('status').className = 'status' + (isError ? ' error' : '');
+        }
+
+        function connect() {
+            updateStatus('正在连接Gateway...');
+            ws = new WebSocket(WS_URL + '/ws');
+
+            ws.onopen = () => {
+                updateStatus('✅ 已连接 - 正在认证...');
+                ws.send(JSON.stringify({
+                    jsonrpc: "2.0", id: 1, method: "auth", 
+                    params: { token: "3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f" }
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.id === 1 && data.result) {
+                        updateStatus('✅ 已连接 - 可以开始提问');
+                    } else if (data.method === 'agent:notify') {
+                        const content = data.params?.message?.content?.[0]?.text || 
+                                       data.params?.message || JSON.stringify(data.params);
+                        addMessage(content, false);
+                    }
+                } catch (e) { console.log('Message:', event.data); }
+            };
+
+            ws.onerror = (error) => {
+                updateStatus('❌ 连接失败', true);
+            };
+
+            ws.onclose = () => {
+                updateStatus('⚠️ 连接已断开', true);
+            };
+        }
+
+        function sendQuestion() {
+            const input = document.getElementById('questionInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const question = input.value.trim();
+            if (!question) return;
+
+            addMessage(question, true);
+            input.value = '';
+            sendBtn.disabled = true;
+
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message bot';
+            loadingDiv.id = 'loadingMsg';
+            loadingDiv.innerHTML = '<div class="message-content">⏳ 思考中...</div>';
+            document.getElementById('chatArea').appendChild(loadingDiv);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    jsonrpc: "2.0", id: Date.now(), method: "agent/run",
+                    params: { message: question, channel: "webchat" }
+                }));
+            }
+
+            setTimeout(() => {
+                const loading = document.getElementById('loadingMsg');
+                if (loading) loading.remove();
+                sendBtn.disabled = false;
+            }, 5000);
+        }
+
+        function addMessage(content, isUser = false) {
+            const chatArea = document.getElementById('chatArea');
+            const div = document.createElement('div');
+            div.className = 'message ' + (isUser ? 'user' : 'bot');
+            const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            div.innerHTML = `<div class="message-content">${escapeHtml(content)}</div><div class="message-time">${time}</div>`;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') sendQuestion();
+        }
+
+        window.onload = () => {
+            connect();
+            setTimeout(() => {
+                addMessage('🌾 您好！我是内蒙古农牧业问答助手。\n\n请问有什么关于内蒙古农牧业的问题可以问我，例如：\n• 2023年规上加工企业有多少个？\n• 牛奶产量全国排名？', false);
+            }, 1000);
+        };
+    </script>
+</body>
+</html>
