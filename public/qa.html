@@ -119,8 +119,9 @@
     </div>
 
     <script>
-        const GATEWAY_URL = window.location.origin;
-        const WS_URL = GATEWAY_URL.replace('http', 'ws');
+        // 配置 Gateway 地址 - 修改为你的 OpenClaw Gateway 地址
+        const GATEWAY_URL = 'http://10.0.0.182:18789';
+        const WS_URL = 'ws://10.0.0.182:18789';
         
         let ws = null;
 
