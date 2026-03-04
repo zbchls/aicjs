@@ -118,9 +118,8 @@
     </div>
 
     <script>
-        // Cloudflare Tunnel 地址
-        const GATEWAY_URL = 'https://consoles-graduation-soup-moments.trycloudflare.com';
-        const WS_URL = 'wss://consoles-graduation-soup-moments.trycloudflare.com/ws';
+        // 使用相对路径（通过代理服务器）
+        const WS_URL = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws';
         const API_TOKEN = '3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f';
 
         function updateStatus(text, isError = false) {
@@ -150,13 +149,22 @@
                     const data = JSON.parse(event.data);
                     console.log('Received:', data);
                     
+                    // 处理连接挑战
+                    if (data.type === 'event' && data.event === 'connect.challenge') {
+                        // 返回 nonce 完成认证
+                        ws.send(JSON.stringify({
+                            type: 'response',
+                            payload: { nonce: data.payload.nonce }
+                        }));
+                        return;
+                    }
+                    
                     if (data.id === 1 && data.result) {
                         updateStatus('✅ 已连接 - 可以提问');
                     } else if (data.method === 'agent:notify') {
                         const content = data.params?.message?.content?.[0]?.text || 
                                        data.params?.message || '';
                         if (content) {
-                            // 移除加载消息
                             const loading = document.getElementById('loadingMsg');
                             if (loading) loading.remove();
                             document.getElementById('sendBtn').disabled = false;

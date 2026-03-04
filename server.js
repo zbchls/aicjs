@@ -2,8 +2,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
-const https = require('https');
-const http2 = require('http2');
 
 const PORT = process.env.PORT || 3000;
 const GATEWAY = '127.0.0.1:18789';
@@ -35,26 +33,6 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Handle ask endpoint (HTTP polling fallback)
-    if (req.url === '/api/ask' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', async () => {
-            try {
-                const { message } = JSON.parse(body);
-                
-                // 通过 WebSocket 发送并等待回复
-                const response = await sendViaGateway(message);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ response }));
-            } catch (error) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: error.message }));
-            }
-        });
-        return;
-    }
-
     // 404
     res.writeHead(404);
     res.end('Not Found');
@@ -63,15 +41,10 @@ const server = http.createServer((req, res) => {
 // WebSocket server
 const wss = new WebSocketServer({ server });
 
-// 存储活跃的客户端连接
-const clients = new Map();
-
 wss.on('connection', (ws, req) => {
-    const clientId = Date.now();
-    console.log('Client connected:', clientId);
+    console.log('Client connected');
     
     let gatewayWs = null;
-    let authenticated = false;
 
     // 连接到 Gateway
     function connectToGateway() {
@@ -79,26 +52,12 @@ wss.on('connection', (ws, req) => {
         
         gatewayWs.on('open', () => {
             console.log('Gateway connected');
-            // 认证
-            gatewayWs.send(JSON.stringify({
-                jsonrpc: "2.0",
-                id: 1,
-                method: "auth",
-                params: { token: TOKEN }
-            }));
         });
 
         gatewayWs.on('message', (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
-                console.log('Gateway:', msg.id, msg.method || msg.result ? 'response' : 'notify');
-                
-                // 转发给客户端
-                if (ws.readyState === 1) {
-                    ws.send(data.toString());
-                }
-            } catch (e) {
-                console.log('Gateway raw:', data.toString());
+            // 转发给客户端
+            if (ws.readyState === 1) {
+                ws.send(data.toString());
             }
         });
 
@@ -109,91 +68,27 @@ wss.on('connection', (ws, req) => {
 
         gatewayWs.on('close', () => {
             console.log('Gateway closed');
-            ws.close();
         });
     }
 
     connectToGateway();
 
     ws.on('message', (data) => {
-        try {
-            const msg = JSON.parse(data.toString());
-            console.log('Client:', msg.id, msg.method);
-            
-            if (msg.method === 'auth') {
-                authenticated = true;
-            }
-            
-            // 转发到 Gateway
-            if (gatewayWs && gatewayWs.readyState === 1) {
-                gatewayWs.send(data.toString());
-            }
-        } catch (e) {
-            console.error('Parse error:', e);
+        // 转发到 Gateway
+        if (gatewayWs && gatewayWs.readyState === 1) {
+            gatewayWs.send(data.toString());
         }
     });
 
     ws.on('close', () => {
-        console.log('Client disconnected:', clientId);
+        console.log('Client disconnected');
         if (gatewayWs) {
             gatewayWs.close();
         }
     });
 });
 
-// 通过 Gateway 发送消息并等待回复
-function sendViaGateway(message) {
-    return new Promise((resolve, reject) => {
-        const gatewayWs = new (require('ws'))('ws://' + GATEWAY + '/ws');
-        const msgId = Date.now();
-        let response = '';
-        let resolved = false;
-
-        gatewayWs.on('open', () => {
-            // 认证
-            gatewayWs.send(JSON.stringify({
-                jsonrpc: "2.0",
-                id: 1,
-                method: "auth",
-                params: { token: TOKEN }
-            }));
-
-            // 发送消息
-            setTimeout(() => {
-                gatewayWs.send(JSON.stringify({
-                    jsonrpc: "2.0",
-                    id: msgId,
-                    method: "agent/run",
-                    params: { message, channel: "webchat" }
-                }));
-            }, 500);
-        });
-
-        gatewayWs.on('message', (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
-                
-                if (msg.method === 'agent:notify') {
-                    const content = msg.params?.message?.content?.[0]?.text || 
-                                   msg.params?.message || '';
-                    response += content;
-                }
-            } catch (e) {}
-        });
-
-        // 5秒超时
-        setTimeout(() => {
-            if (!resolved) {
-                resolved = true;
-                gatewayWs.close();
-                resolve(response || '请求超时');
-            }
-        }, 15000);
-    });
-}
-
 server.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}/`);
     console.log(`QA Page: http://localhost:${PORT}/qa`);
-    console.log(`WebSocket: ws://localhost:${PORT}/ws`);
 });
