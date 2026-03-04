@@ -118,88 +118,20 @@
     </div>
 
     <script>
-        // 通过代理服务器连接 Gateway
-        const WS_URL = 'ws://' + window.location.host + '/ws';
-        const API_TOKEN = '3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f';
-
-        let sessionKey = null;
+        // 使用相对路径，通过代理服务器转发
+        const API_BASE = '';
+        
+        // 轮询获取回复
+        let pollInterval = null;
+        let lastMessageId = 0;
 
         function updateStatus(text, isError = false) {
             document.getElementById('status').textContent = text;
             document.getElementById('status').className = 'status' + (isError ? ' error' : '');
         }
 
-        // 使用 WebSocket API
-        async function connectWebSocket() {
-            return new Promise((resolve, reject) => {
-                updateStatus('正在连接...');
-                
-                const ws = new WebSocket(WS_URL);
-
-                ws.onopen = () => {
-                    console.log('WebSocket connected');
-                    // 发送认证
-                    ws.send(JSON.stringify({
-                        jsonrpc: "2.0",
-                        id: 1,
-                        method: "auth",
-                        params: { token: API_TOKEN }
-                    }));
-                };
-
-                ws.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        console.log('Received:', data);
-                        
-                        if (data.id === 1 && data.result) {
-                            updateStatus('✅ 已连接 - 可以提问');
-                            resolve(ws);
-                        } else if (data.method === 'agent:notify') {
-                            const content = data.params?.message?.content?.[0]?.text || 
-                                           data.params?.message || '';
-                            if (content) {
-                                addMessage(content, false);
-                                const loading = document.getElementById('loadingMsg');
-                                if (loading) loading.remove();
-                                document.getElementById('sendBtn').disabled = false;
-                            }
-                        } else if (data.error) {
-                            console.error('Error:', data.error);
-                            updateStatus('❌ 错误: ' + JSON.stringify(data.error), true);
-                        }
-                    } catch (e) {
-                        console.log('Raw:', event.data);
-                    }
-                };
-
-                ws.onerror = (error) => {
-                    console.error('WS Error:', error);
-                    updateStatus('❌ 连接失败', true);
-                };
-
-                ws.onclose = () => {
-                    updateStatus('⚠️ 连接断开', true);
-                };
-
-                // 超时处理
-                setTimeout(() => {
-                    reject(new Error('Connection timeout'));
-                }, 5000);
-            });
-        }
-
-        let ws = null;
-
-        async function init() {
-            try {
-                ws = await connectWebSocket();
-            } catch (e) {
-                updateStatus('⚠️ 使用备用连接方式...');
-            }
-        }
-
-        function sendQuestion() {
+        // 发送问题（使用 HTTP POST 轮询方式）
+        async function sendQuestion() {
             const input = document.getElementById('questionInput');
             const sendBtn = document.getElementById('sendBtn');
             const question = input.value.trim();
@@ -215,23 +147,111 @@
             loadingDiv.innerHTML = '<div class="message-content">⏳ 思考中...</div>';
             document.getElementById('chatArea').appendChild(loadingDiv);
 
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                // 通过 WebSocket 发送
+            try {
+                // 使用 fetch 发送问题（需要后端支持）
+                // 这里我们用 Server-Sent Events 或者轮询
+                const response = await fetch(API_BASE + '/api/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: question })
+                });
+
+                if (!response.ok) {
+                    throw new Error('请求失败');
+                }
+
+                const data = await response.json();
+                
+                // 移除加载消息
+                const loading = document.getElementById('loadingMsg');
+                if (loading) loading.remove();
+
+                // 显示回答
+                addMessage(data.response || data.message || JSON.stringify(data), false);
+            } catch (error) {
+                console.error('Error:', error);
+                
+                // 移除加载消息
+                const loading = document.getElementById('loadingMsg');
+                if (loading) loading.remove();
+                
+                // 尝试使用 WebSocket
+                addMessage('🔄 尝试连接...', false);
+                sendViaWebSocket(question);
+            }
+
+            sendBtn.disabled = false;
+        }
+
+        // 使用 WebSocket 发送
+        function sendViaWebSocket(question) {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws';
+            
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                updateStatus('✅ WebSocket已连接');
+                
+                // 发送认证
                 ws.send(JSON.stringify({
                     jsonrpc: "2.0",
-                    id: Date.now(),
-                    method: "agent/run",
-                    params: {
-                        message: question,
-                        channel: "webchat"
-                    }
+                    id: 1,
+                    method: "auth",
+                    params: { token: "3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f" }
                 }));
-            } else {
-                // 备用：显示提示
-                loadingDiv.remove();
-                addMessage('❌ 连接未建立，请刷新页面重试', false);
-                sendBtn.disabled = false;
-            }
+
+                // 发送问题
+                setTimeout(() => {
+                    ws.send(JSON.stringify({
+                        jsonrpc: "2.0",
+                        id: Date.now(),
+                        method: "agent/run",
+                        params: { message: question, channel: "webchat" }
+                    }));
+                }, 500);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received:', data);
+                    
+                    if (data.method === 'agent:notify') {
+                        const content = data.params?.message?.content?.[0]?.text || 
+                                       data.params?.message || '';
+                        if (content) {
+                            // 移除之前的"尝试连接"消息
+                            const msgs = document.querySelectorAll('.message.bot');
+                            if (msgs.length > 0) {
+                                const lastBotMsg = msgs[msgs.length - 1];
+                                if (lastBotMsg.textContent.includes('尝试连接')) {
+                                    lastBotMsg.remove();
+                                }
+                            }
+                            addMessage(content, false);
+                        }
+                    }
+                } catch (e) {
+                    console.log('Raw message:', event.data);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addMessage('❌ 连接失败，请刷新页面重试', false);
+            };
+
+            ws.onclose = () => {
+                updateStatus('⚠️ 连接已关闭', true);
+            };
+
+            // 5秒后关闭连接
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                }
+            }, 10000);
         }
 
         function addMessage(content, isUser = false) {
@@ -255,12 +275,11 @@
         }
 
         // 初始化
-        init();
-        
         window.onload = () => {
+            updateStatus('✅ 已就绪 - 请输入问题');
             setTimeout(() => {
-                addMessage('🌾 您好！我是内蒙古农牧业问答助手。\n\n请问有什么关于内蒙古农牧业的问题可以问我，例如：\n• 2023年粮食产量是多少？\n• 牛奶产量全国排名？', false);
-            }, 1000);
+                addMessage('🌾 您好！我是内蒙古农牧业问答助手。\n\n请问有什么关于内蒙古农牧业的问题可以问我，例如：\n• 2023？\n•年粮食产量是多少 牛奶产量全国排名？', false);
+            }, 500);
         };
     </script>
 </body>
