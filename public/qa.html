@@ -118,8 +118,11 @@
     </div>
 
     <script>
-        // 直接通过 Gateway 发送消息
-        const GATEWAY_URL = 'http://10.0.0.182:18789';
+        // 直接通过 Gateway 发送消息 - 使用相对路径代理
+        // 注意：通过本网页访问时，会自动使用代理
+        const isLocal = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1');
+        const GATEWAY_URL = isLocal ? 'http://127.0.0.1:18789' : '/api';
+        const WS_URL = isLocal ? 'ws://127.0.0.1:18789/ws' : 'ws://' + window.location.host + '/ws';
         const API_TOKEN = '3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f';
 
         let sessionKey = null;
@@ -134,7 +137,7 @@
             return new Promise((resolve, reject) => {
                 updateStatus('正在连接...');
                 
-                const ws = new WebSocket('ws://10.0.0.182:18789/ws');
+                const ws = new WebSocket(WS_URL);
 
                 ws.onopen = () => {
                     console.log('WebSocket connected');
