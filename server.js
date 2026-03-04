@@ -1,9 +1,10 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
-const GATEWAY = 'http://127.0.0.1:18789';
+const GATEWAY = '127.0.0.1:18789';
 
 const server = http.createServer((req, res) => {
     // CORS headers
@@ -31,31 +32,34 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Proxy WebSocket connections
-    if (req.url.startsWith('/ws')) {
-        const targetUrl = GATEWAY + '/ws';
-        
-        // For HTTP proxy, we need to upgrade to WebSocket
-        // This is a simplified version - for production, use ws module
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('WebSocket endpoint. Connect directly to: ' + GATEWAY + '/ws');
-        return;
-    }
-
-    // Proxy API requests
-    if (req.url.startsWith('/api')) {
-        const targetPath = req.url.replace('/api', '');
+    // Proxy API requests (including WebSocket upgrade)
+    if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
+        const targetPath = req.url.startsWith('/api') ? req.url.replace('/api', '') : req.url;
+        const targetPort = req.url.startsWith('/ws') ? 18789 : 18789;
         
         const options = {
-            hostname: '127.0.0.1',
-            port: 18789,
+            hostname: GATEWAY,
+            port: targetPort,
             path: targetPath,
             method: req.method,
             headers: {
                 ...req.headers,
-                'Host': '127.0.0.1:18789'
+                'Host': GATEWAY
             }
         };
+
+        if (req.url.startsWith('/ws')) {
+            // For WebSocket, we need to handle upgrade
+            const proxy = http.request(options, (proxyRes) => {
+                // Just acknowledge - actual WS upgrade happens differently
+            });
+            
+            req.pipe(proxy);
+            proxy.on('error', (e) => {
+                console.error('Proxy error:', e.message);
+            });
+            return;
+        }
 
         const proxyReq = http.request(options, (proxyRes) => {
             res.writeHead(proxyRes.statusCode, proxyRes.headers);
@@ -71,7 +75,45 @@ const server = http.createServer((req, res) => {
     res.end('Not Found');
 });
 
+// Create WebSocket server for proxying
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws, req) => {
+    console.log('WebSocket client connected');
+    
+    // Connect to Gateway
+    const gatewayWs = new (require('ws'))('ws://' + GATEWAY + '/ws');
+
+    gatewayWs.on('open', () => {
+        console.log('Connected to Gateway');
+        ws.send(JSON.stringify({
+            jsonrpc: "2.0", id: 0, method: "auth", 
+            params: { token: "3dd33442fb0a1fd55e5dde03286755df24bd4f45bf13f79f" }
+        }));
+    });
+
+    gatewayWs.on('message', (data) => {
+        ws.send(data.toString());
+    });
+
+    gatewayWs.on('error', (error) => {
+        console.error('Gateway WS error:', error.message);
+        ws.close();
+    });
+
+    ws.on('message', (data) => {
+        if (gatewayWs.readyState === 1) {
+            gatewayWs.send(data.toString());
+        }
+    });
+
+    ws.on('close', () => {
+        gatewayWs.close();
+    });
+});
+
 server.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}/`);
     console.log(`QA Page: http://localhost:${PORT}/qa`);
+    console.log(`WebSocket proxy: ws://localhost:${PORT}/ws`);
 });
